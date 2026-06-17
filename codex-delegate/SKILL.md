@@ -30,10 +30,15 @@ If ambiguous, default to `-s workspace-write` — it is safe (scoped to the work
 - Default: omit the `-m` flag (uses the model from the user's codex config)
 - If the user explicitly requests a specific model (e.g. "gpt-5.4で", "use gpt-5.4-mini"), pass it via `-m <model>`
 
+### 2a. Determine reasoning effort
+
+- Default: `medium` — always pass `-c model_reasoning_effort=medium` unless the user specifies otherwise
+- If the user explicitly requests a different level (e.g. "highで", "effort low"), use that value instead
+
 ### 3. Build and run the command
 
 ```
-codex exec -s <sandbox> [-m <model>] "<prompt>"
+codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> "<prompt>"
 ```
 
 **Always run with `run_in_background: true`** in the Bash tool call. Codex tasks can take significant time and the Bash timeout (max 10min) is insufficient. Background execution has no timeout and sends a notification on completion.
