@@ -35,13 +35,21 @@ If ambiguous, default to `-s workspace-write` — it is safe (scoped to the work
 - Default: `medium` — always pass `-c model_reasoning_effort=medium` unless the user specifies otherwise
 - If the user explicitly requests a different level (e.g. "highで", "effort low"), use that value instead
 
+### 2b. Determine web search
+
+- Default: omit — no live web search.
+- Enable when the task needs current/external information (research, fact-checking, latest docs/news, "調べて", "最新", "web検索"). Pass the `--search` flag, which turns on the native Responses `web_search` tool.
+- `--search` is a top-level flag and MUST come before the `exec` subcommand: `codex --search exec ...`. Placing it after `exec` (`codex exec --search`) errors with "unexpected argument '--search'".
+
 ### 3. Build and run the command
 
 ```
-codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> "<prompt>"
+codex [--search] exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> "<prompt>" </dev/null
 ```
 
-**Always run with `run_in_background: true`** in the Bash tool call. Codex tasks can take significant time and the Bash timeout (max 10min) is insufficient. Background execution has no timeout and sends a notification on completion.
+**Always redirect stdin: append `</dev/null` to the command.** When stdin is a non-TTY pipe (which is exactly what the Bash tool's `run_in_background: true` provides), `codex exec` tries to read stdin to append it as a `<stdin>` block — even when a prompt argument is given — and then blocks forever waiting for an EOF that never comes. The process sits at 0% CPU with no output and never even starts its session. `</dev/null` gives it an immediate EOF and avoids the hang. (Same class of bug bites any CLI that reads non-TTY stdin when launched detached — e.g. `marp-cli`.)
+
+**Always run with `run_in_background: true`** in the Bash tool call. Codex tasks can take significant time and the Bash timeout (max 10min) is insufficient. Background execution has no timeout and sends a notification on completion. This is also why `</dev/null` is mandatory: a backgrounded codex with an open stdin pipe hangs silently.
 
 Rules for constructing the prompt:
 - Pass the user's intent as-is — do not over-interpret or add unnecessary constraints
@@ -71,22 +79,24 @@ After file-write tasks, read the created/modified files to confirm the changes w
 
 ## Important notes
 
-- `codex exec` reads from stdin if no prompt argument is given. Always pass the prompt as an argument to avoid hanging.
+- `codex exec` reads from stdin if no prompt argument is given — always pass the prompt as an argument. But that alone is NOT enough: with a non-TTY/piped stdin (i.e. `run_in_background: true`) it still reads stdin to append a `<stdin>` block and hangs on EOF. **Always append `</dev/null`** (see step 3).
 - The `--full-auto` and `--dangerously-bypass-approvals-and-sandbox` flags must NOT be used.
 - If `codex` is not found in PATH, inform the user and suggest installing it.
 
 ## Example invocations
 
+All examples append `</dev/null` (mandatory — see step 3).
+
 ```bash
 # Read-only: code investigation
-codex exec -s read-only "Explain the authentication flow in this codebase"
+codex exec -s read-only "Explain the authentication flow in this codebase" </dev/null
 
 # Write: create a file
-codex exec -s workspace-write "Create a Python script that reads CSV files and outputs JSON"
+codex exec -s workspace-write "Create a Python script that reads CSV files and outputs JSON" </dev/null
 
 # Write with model override
-codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to use connection pooling"
+codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to use connection pooling" </dev/null
 
 # Review: output to /tmp
-codex exec -s workspace-write "Review the recent changes for potential bugs. Write the review as Markdown to /tmp/codex-reviews/recent-changes-20260617-141000.md"
+codex exec -s workspace-write "Review the recent changes for potential bugs. Write the review as Markdown to /tmp/codex-reviews/recent-changes-20260617-141000.md" </dev/null
 ```
