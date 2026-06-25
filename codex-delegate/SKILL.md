@@ -49,12 +49,14 @@ Default to enabling network only when the task clearly needs it. Prefer narrowin
 ### 3. Build and run the command
 
 ```
-codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> [network flags] "<prompt>"
+codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> [network flags] "<prompt>" < /dev/null
 ```
 
 where `[network flags]` are added only for network-requiring tasks (see §1a), e.g. `-c sandbox_workspace_write.network_access=true`.
 
 **Always run with `run_in_background: true`** in the Bash tool call. Codex tasks can take significant time and the Bash timeout (max 10min) is insufficient. Background execution has no timeout and sends a notification on completion.
+
+**Always append `< /dev/null`.** `codex exec` reads stdin for additional prompt input *even when a prompt argument is given*. Under `run_in_background: true` the shell's stdin stays open with no EOF, so codex blocks forever — the output stalls at `Reading additional input from stdin...` and never runs. Passing the prompt as an argument is **not** enough on its own; redirecting stdin from `/dev/null` gives an immediate EOF and prevents the hang. Make `< /dev/null` part of every invocation. (To recover from a hang already in progress: `pkill -f "codex exec"`, then re-run with the redirect.)
 
 Rules for constructing the prompt:
 - Pass the user's intent as-is — do not over-interpret or add unnecessary constraints
@@ -84,32 +86,37 @@ After file-write tasks, read the created/modified files to confirm the changes w
 
 ## Important notes
 
-- `codex exec` reads from stdin if no prompt argument is given. Always pass the prompt as an argument to avoid hanging.
+- **Always append `< /dev/null` to close stdin** (see §3). `codex exec` reads stdin for extra prompt input even when a prompt argument is given; under `run_in_background: true` stdin never reaches EOF, so codex hangs at `Reading additional input from stdin...`. Passing the prompt as an argument is necessary but **not sufficient** — the `< /dev/null` redirect is what prevents the hang.
 - The `--full-auto` and `--dangerously-bypass-approvals-and-sandbox` flags must NOT be used.
 - If `codex` is not found in PATH, inform the user and suggest installing it.
 
 ## Example invocations
 
+Every invocation ends with `< /dev/null` (close stdin — see §3) and is launched with `run_in_background: true`.
+
 ```bash
 # Read-only: code investigation
-codex exec -s read-only "Explain the authentication flow in this codebase"
+codex exec -s read-only "Explain the authentication flow in this codebase" < /dev/null
 
 # Write: create a file
-codex exec -s workspace-write "Create a Python script that reads CSV files and outputs JSON"
+codex exec -s workspace-write "Create a Python script that reads CSV files and outputs JSON" < /dev/null
 
 # Write with model override
-codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to use connection pooling"
+codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to use connection pooling" < /dev/null
 
 # Review: output to /tmp
-codex exec -s workspace-write "Review the recent changes for potential bugs. Write the review as Markdown to /tmp/codex-reviews/recent-changes-20260617-141000.md"
+codex exec -s workspace-write "Review the recent changes for potential bugs. Write the review as Markdown to /tmp/codex-reviews/recent-changes-20260617-141000.md" < /dev/null
 
 # Network: install dependencies (broad access)
-codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "Install dependencies and make the build pass"
+codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "Install dependencies and make the build pass" < /dev/null
 
 # Network: restricted to a known domain
 codex exec -s workspace-write \
   -c sandbox_workspace_write.network_access=true \
   -c features.network_proxy.enabled=true \
   -c 'features.network_proxy.domains={ "registry.npmjs.org" = "allow" }' \
-  "Run npm install"
+  "Run npm install" < /dev/null
+
+# Multi-line prompt (heredoc-style): the redirect still goes at the very end
+codex exec -s workspace-write -c model_reasoning_effort=medium "Download the brand SVG logos into src/assets/logos/ and summarize their licenses" < /dev/null
 ```
