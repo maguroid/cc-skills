@@ -25,6 +25,17 @@ Analyze the user's task and select the sandbox mode:
 
 If ambiguous, default to `-s workspace-write` — it is safe (scoped to the workspace and /tmp) and avoids failures from write-blocked operations.
 
+### 1a. Determine network access
+
+Both `read-only` and `workspace-write` sandboxes **block network access by default**. If the task requires network (e.g. `npm install`, `pip install`, fetching a URL, `git fetch`/`git clone`, calling an external API), enable it per-invocation with `-c` flags — no need to edit `~/.codex/config.toml`:
+
+- Enable network: `-c sandbox_workspace_write.network_access=true`
+- (Optional) Restrict to specific domains via the network proxy:
+  - `-c features.network_proxy.enabled=true`
+  - `-c 'features.network_proxy.domains={ "registry.npmjs.org" = "allow" }'`
+
+Default to enabling network only when the task clearly needs it. Prefer narrowing to known domains for installs/fetches when the domains are predictable; omit the proxy restriction when the task needs broad/unknown access.
+
 ### 2. Determine model
 
 - Default: omit the `-m` flag (uses the model from the user's codex config)
@@ -38,8 +49,10 @@ If ambiguous, default to `-s workspace-write` — it is safe (scoped to the work
 ### 3. Build and run the command
 
 ```
-codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> "<prompt>"
+codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> [network flags] "<prompt>"
 ```
+
+where `[network flags]` are added only for network-requiring tasks (see §1a), e.g. `-c sandbox_workspace_write.network_access=true`.
 
 **Always run with `run_in_background: true`** in the Bash tool call. Codex tasks can take significant time and the Bash timeout (max 10min) is insufficient. Background execution has no timeout and sends a notification on completion.
 
@@ -89,4 +102,14 @@ codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to u
 
 # Review: output to /tmp
 codex exec -s workspace-write "Review the recent changes for potential bugs. Write the review as Markdown to /tmp/codex-reviews/recent-changes-20260617-141000.md"
+
+# Network: install dependencies (broad access)
+codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "Install dependencies and make the build pass"
+
+# Network: restricted to a known domain
+codex exec -s workspace-write \
+  -c sandbox_workspace_write.network_access=true \
+  -c features.network_proxy.enabled=true \
+  -c 'features.network_proxy.domains={ "registry.npmjs.org" = "allow" }' \
+  "Run npm install"
 ```
