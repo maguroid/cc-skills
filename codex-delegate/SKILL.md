@@ -5,7 +5,7 @@ description: Delegate tasks to OpenAI Codex CLI (codex exec). Use when the user 
 
 # Codex Delegate Skill
 
-Delegate tasks to the OpenAI Codex CLI via `codex exec`. Claude Code acts as the orchestrator: it determines the appropriate sandbox level, runs `codex exec`, and summarizes the results.
+Delegate tasks to the OpenAI Codex CLI via `codex exec`. Claude Code acts as the orchestrator: it determines the appropriate sandbox level, runs `codex exec`, and summarizes the results. When the `orca-cli` skill's CLI is available and Orca is running, the invocation is routed through an Orca terminal instead of a raw Bash process, so progress is visible in Orca's GUI/CLI (see §0/§3b).
 
 ## When to use
 
@@ -13,6 +13,19 @@ Delegate tasks to the OpenAI Codex CLI via `codex exec`. Claude Code acts as the
 - The user asks to delegate a task to Codex in natural language (e.g. "codexにやらせて", "codexで実装して", "delegate this to codex")
 
 ## Execution flow
+
+### 0. Determine execution surface (Orca vs. plain Bash)
+
+Check whether the `orca` CLI is available and Orca is currently running:
+
+```bash
+command -v orca || command -v orca-ide
+orca status --json
+```
+
+- If the CLI is not found, or `orca status` reports Orca is not running, use the plain Bash execution path (§3).
+- If the CLI is available and Orca is running, route the invocation through an Orca terminal instead (§3b). This makes the delegated task's progress visible in Orca's terminal list and worktree card (GUI and CLI), instead of running invisibly in a background Bash process.
+- Do not launch Orca (`orca open`) just to enable this — only route through Orca when it is already running. Otherwise fall back to §3 without asking the user.
 
 ### 1. Determine sandbox level
 
@@ -46,7 +59,7 @@ Default to enabling network only when the task clearly needs it. Prefer narrowin
 - Default: `medium` — always pass `-c model_reasoning_effort=medium` unless the user specifies otherwise
 - If the user explicitly requests a different level (e.g. "highで", "effort low"), use that value instead
 
-### 3. Build and run the command
+### 3. Build and run the command (plain Bash — when Orca is not used, per §0)
 
 ```
 codex exec -s <sandbox> [-m <model>] -c model_reasoning_effort=<effort> [network flags] "<prompt>" < /dev/null
@@ -72,6 +85,32 @@ Write the review result as a Markdown file to /tmp/codex-reviews/<descriptive-na
 ```
 
 Use `-s workspace-write` so Codex can write to `/tmp`. After completion, read the output file and summarize it to the user with the file path.
+
+### 3b. Orca-routed execution (when available, per §0)
+
+Instead of running `codex exec` directly via the Bash tool, create a terminal in the *current* Orca worktree and hand it the same command built in §3:
+
+```bash
+orca terminal create --worktree active --title "codex-delegate" --command '<full codex exec invocation, including the trailing < /dev/null>' --json
+```
+
+- Use `--worktree active` — delegation acts on the current checkout, matching the plain-Bash path. Do not create a new worktree/checkout for this (that would be a handoff, a different workflow covered by the `orca-cli` skill).
+- Still end the command with `< /dev/null` (§ "Important notes"). The stdin-EOF issue is about `codex exec` reading stdin for extra input; it applies to the command being run regardless of whether it sits in a raw Bash pipe or an Orca-managed PTY.
+- Capture the returned terminal handle from the JSON output.
+- To learn when it finishes without blocking the conversation, wait for exit in the background:
+
+```bash
+orca terminal wait --terminal <handle> --for exit --timeout-ms 3600000
+```
+
+  Run this via the Bash tool with `run_in_background: true` — same rationale as the plain-Bash path: codex tasks can run long, and this keeps the main loop free until Orca reports the process has exited.
+- Once it exits, read the terminal's output to see what Codex did:
+
+```bash
+orca terminal read --terminal <handle> --json
+```
+
+- Continue with §4/§5 using that output. If the task is a review (§3a), Codex still writes its Markdown output to `/tmp/codex-reviews/...`; read that file as usual once the terminal exits.
 
 ### 4. Handle the result
 
@@ -119,4 +158,19 @@ codex exec -s workspace-write \
 
 # Multi-line prompt (heredoc-style): the redirect still goes at the very end
 codex exec -s workspace-write -c model_reasoning_effort=medium "Download the brand SVG logos into src/assets/logos/ and summarize their licenses" < /dev/null
+```
+
+Orca-routed (§3b), when the `orca` CLI is available and running:
+
+```bash
+# 1. Create the terminal in the current worktree with the same command as any plain-Bash example above
+orca terminal create --worktree active --title "codex-delegate" \
+  --command 'codex exec -s workspace-write "Refactor the database module to use connection pooling" < /dev/null' --json
+# -> capture terminalHandle from the JSON result
+
+# 2. Wait for exit in the background (run_in_background: true)
+orca terminal wait --terminal <terminalHandle> --for exit --timeout-ms 3600000
+
+# 3. Once notified of exit, read what happened
+orca terminal read --terminal <terminalHandle> --json
 ```
