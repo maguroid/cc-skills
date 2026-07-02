@@ -132,7 +132,7 @@ orca terminal read --terminal <handle> --json
 
   `tui-idle` does **not** necessarily mean the task is complete — Codex may be paused on an approval prompt waiting for input. Inspect the read output: if it shows an approval prompt, decide on a response, send it with `orca terminal send`, and go back to the "wait for completion" step above. Once the output confirms the task actually finished, continue with §4/§5. If the task is a review (§3a), Codex still writes its Markdown output to `/tmp/codex-reviews/...`; read that file once completion is confirmed, same as the plain-Bash path.
 
-- Leave the terminal (codex session) open after the task completes. Do not close it — keeping it open is what lets the user see the session in Orca's GUI, which is the point of routing through Orca in the first place.
+- **Close the terminal after the task completes.** Once completion is confirmed and the results have been read and summarized (§4/§5), close the codex session with `orca terminal close --terminal <handle> --json` so finished sessions don't pile up in Orca's GUI. Exceptions — leave it open and tell the user when: the task failed or ended ambiguously (the session is needed for diagnosis), it is blocked on an approval prompt awaiting a decision, follow-up work in the same session is already planned, or the user asked to keep it.
 
 - Terminal handles are runtime-scoped and can go stale (`terminal_handle_stale` has been observed in practice). If a call fails with that error, re-fetch the handle with `orca terminal list --json` and retry.
 
@@ -214,4 +214,9 @@ sleep 10 && orca terminal wait --terminal <terminalHandle> --for tui-idle --time
 # 5. Once notified, read what happened. tui-idle may mean "waiting on an approval prompt"
 #    rather than "done" -- if so, send a response with terminal send and repeat step 4.
 orca terminal read --terminal <terminalHandle> --json
+
+# 6. After confirming completion and summarizing the results, close the session
+#    (skip this only for the exceptions listed in §3b: failure, pending approval,
+#    planned follow-up in the same session, or an explicit user request to keep it)
+orca terminal close --terminal <terminalHandle> --json
 ```
