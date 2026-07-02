@@ -5,7 +5,7 @@ description: Delegate tasks to OpenAI Codex CLI (codex exec). Use when the user 
 
 # Codex Delegate Skill
 
-Delegate tasks to the OpenAI Codex CLI via `codex exec`. Claude Code acts as the orchestrator: it determines the appropriate sandbox level, runs `codex exec`, and summarizes the results. When the `orca-cli` skill's CLI is available and Orca is running, the invocation is routed through an Orca terminal instead of a raw Bash process, so progress is visible in Orca's GUI/CLI (see §0/§3b).
+Delegate tasks to the OpenAI Codex CLI via `codex exec`. Claude Code acts as the orchestrator: it determines the appropriate sandbox level, runs `codex exec`, and summarizes the results. When the `orca-cli` skill's CLI is available and Orca is running, the invocation is routed through an Orca terminal running the interactive `codex` TUI instead of headless `codex exec` in a raw Bash process; Orca recognizes the interactive TUI as an agent CLI and surfaces it as a live agent session in its GUI (see §0/§3b).
 
 ## When to use
 
@@ -24,7 +24,7 @@ orca status --json
 ```
 
 - If the CLI is not found, or `orca status` reports Orca is not running, use the plain Bash execution path (§3).
-- If the CLI is available and Orca is running, route the invocation through an Orca terminal instead (§3b). This makes the delegated task's progress visible in Orca's terminal list and worktree card (GUI and CLI), instead of running invisibly in a background Bash process.
+- If the CLI is available and Orca is running, route the invocation through an Orca terminal instead (§3b). This launches an interactive `codex` TUI (not headless `codex exec`) in that terminal; Orca detects it as an agent CLI and shows it as a live agent session in its GUI, instead of running invisibly in a background Bash process.
 - Do not launch Orca (`orca open`) just to enable this — only route through Orca when it is already running. Otherwise fall back to §3 without asking the user.
 
 ### 1. Determine sandbox level
@@ -53,11 +53,13 @@ Default to enabling network only when the task clearly needs it. Prefer narrowin
 
 - Default: omit the `-m` flag (uses the model from the user's codex config)
 - If the user explicitly requests a specific model (e.g. "gpt-5.4で", "use gpt-5.4-mini"), pass it via `-m <model>`
+- This default applies to the plain-Bash `codex exec` path (§3). For Orca-routed TUI execution (§3b), omit `-m` by default and let `~/.codex/config.toml` govern the model — see the "Flag differences: TUI vs `exec`" note in §3b.
 
 ### 2a. Determine reasoning effort
 
 - Default: `medium` — always pass `-c model_reasoning_effort=medium` unless the user specifies otherwise
 - If the user explicitly requests a different level (e.g. "highで", "effort low"), use that value instead
+- This default applies to the plain-Bash `codex exec` path (§3). For Orca-routed TUI execution (§3b), omit the flag by default and let `~/.codex/config.toml` govern reasoning effort — see the "Flag differences: TUI vs `exec`" note in §3b.
 
 ### 2b. Determine web search
 
@@ -94,29 +96,52 @@ Use `-s workspace-write` so Codex can write to `/tmp`. After completion, read th
 
 ### 3b. Orca-routed execution (when available, per §0)
 
-Instead of running `codex exec` directly via the Bash tool, create a terminal in the *current* Orca worktree and hand it the same command built in §3:
+Instead of running `codex exec` directly via the Bash tool, launch the interactive `codex` TUI in a terminal in the *current* Orca worktree. Orca only recognizes the interactive TUI as an agent CLI and surfaces it as a live session in its GUI; a headless `codex exec` invocation is treated as an ordinary shell command and does **not** show up as an agent session, so do not route `codex exec` through Orca for this purpose.
+
+- Create the terminal running the interactive TUI:
 
 ```bash
-orca terminal create --worktree active --title "codex-delegate" --command '<full codex exec invocation, including the trailing < /dev/null>' --json
+orca terminal create --worktree active --title "codex-delegate" --command "codex [flags]" --json
 ```
 
-- Use `--worktree active` — delegation acts on the current checkout, matching the plain-Bash path. Do not create a new worktree/checkout for this (that would be a handoff, a different workflow covered by the `orca-cli` skill).
-- Still end the command with `< /dev/null` (§ "Important notes"). The stdin-EOF issue is about `codex exec` reading stdin for extra input; it applies to the command being run regardless of whether it sits in a raw Bash pipe or an Orca-managed PTY.
-- Capture the returned terminal handle from the JSON output.
-- To learn when it finishes without blocking the conversation, wait for exit in the background:
+  Use `--worktree active` — delegation acts on the current checkout, matching the plain-Bash path. Do not create a new worktree/checkout for this (that would be a handoff, a different workflow covered by the `orca-cli` skill). `--command` runs bare `codex`, optionally with flags (see "Flag differences: TUI vs `exec`" below) — no subcommand and no prompt on the command line; the prompt is sent separately below. **Do not append `< /dev/null`** — this is the opposite of the §3/"Important notes" rule: that stdin-EOF workaround exists because headless `codex exec` reads stdin for extra prompt input and hangs waiting for EOF, whereas the interactive TUI runs on a PTY and needs stdin to stay open to receive `terminal send` input; redirecting it from `/dev/null` breaks the TUI on startup. Capture the returned terminal handle from the JSON output.
+
+- Wait for the TUI to finish starting up:
 
 ```bash
-orca terminal wait --terminal <handle> --for exit --timeout-ms 3600000
+orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 30000 --json
 ```
 
-  Run this via the Bash tool with `run_in_background: true` — same rationale as the plain-Bash path: codex tasks can run long, and this keeps the main loop free until Orca reports the process has exited.
-- Once it exits, read the terminal's output to see what Codex did:
+- Send the prompt as terminal input, not as a command-line argument — quoting a long prompt through `--command` gets unwieldy and error-prone:
+
+```bash
+orca terminal send --terminal <handle> --text "<prompt>" --enter --json
+```
+
+- Wait for completion. The TUI process never exits, so wait on `--for tui-idle`, not `--for exit`. Immediately after `terminal send`, Orca can report `tui-idle` before Codex has actually started working, so insert a short sleep before waiting. Run this via the Bash tool with `run_in_background: true`, since Codex tasks can run long and this keeps the main loop free:
+
+```bash
+sleep 10 && orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 3600000 --json
+```
+
+- Read the output once idle:
 
 ```bash
 orca terminal read --terminal <handle> --json
 ```
 
-- Continue with §4/§5 using that output. If the task is a review (§3a), Codex still writes its Markdown output to `/tmp/codex-reviews/...`; read that file as usual once the terminal exits.
+  `tui-idle` does **not** necessarily mean the task is complete — Codex may be paused on an approval prompt waiting for input. Inspect the read output: if it shows an approval prompt, decide on a response, send it with `orca terminal send`, and go back to the "wait for completion" step above. Once the output confirms the task actually finished, continue with §4/§5. If the task is a review (§3a), Codex still writes its Markdown output to `/tmp/codex-reviews/...`; read that file once completion is confirmed, same as the plain-Bash path.
+
+- Leave the terminal (codex session) open after the task completes. Do not close it — keeping it open is what lets the user see the session in Orca's GUI, which is the point of routing through Orca in the first place.
+
+- Terminal handles are runtime-scoped and can go stale (`terminal_handle_stale` has been observed in practice). If a call fails with that error, re-fetch the handle with `orca terminal list --json` and retry.
+
+#### Flag differences: TUI vs `exec`
+
+- The interactive TUI takes the form `codex [OPTIONS] [PROMPT]` — there is no `exec` subcommand. `--search` is an ordinary option here; unlike the `exec` path (§2b), there is no subcommand-ordering constraint to worry about.
+- `-s <sandbox>`, `-m <model>`, and `-c key=value` behave the same as in `exec`.
+- **Important**: the interactive TUI honors the user's `~/.codex/config.toml` settings (model, reasoning effort, sandbox, approval policy) as-is. Because of this, the `exec`-path defaults from §2 (omit `-m`) and §2a (always pass `-c model_reasoning_effort=medium`) do **not** carry over — for Orca-routed TUI invocations, the default is to pass **no** model/effort flags and let the user's config decide. Only add flags when there's an explicit reason to deviate: the user requested a specific model/effort, the task needs network access (same `-c` flags as §1a), or a read-only investigation should be constrained with `-s read-only`.
+- Whether an approval prompt appears depends on the config's `approval_policy`. Watch for it and respond as described in the "read the output" step above.
 
 ### 4. Handle the result
 
@@ -131,7 +156,7 @@ After file-write tasks, read the created/modified files to confirm the changes w
 
 ## Important notes
 
-- **Always append `< /dev/null` to close stdin** (see §3). `codex exec` reads stdin for extra prompt input even when a prompt argument is given; under `run_in_background: true` stdin never reaches EOF, so codex hangs at `Reading additional input from stdin...`. Passing the prompt as an argument is necessary but **not sufficient** — the `< /dev/null` redirect is what prevents the hang.
+- **Always append `< /dev/null` to close stdin** (see §3). `codex exec` reads stdin for extra prompt input even when a prompt argument is given; under `run_in_background: true` stdin never reaches EOF, so codex hangs at `Reading additional input from stdin...`. Passing the prompt as an argument is necessary but **not sufficient** — the `< /dev/null` redirect is what prevents the hang. This applies to headless `codex exec` only (§3, and §3a review tasks, which run through `exec`). **Never redirect stdin for the interactive TUI used in Orca-routed execution (§3b)** — it needs stdin to stay open on the PTY to receive `terminal send` input, and `< /dev/null` breaks it on startup.
 - The `--full-auto` and `--dangerously-bypass-approvals-and-sandbox` flags must NOT be used.
 - If `codex` is not found in PATH, inform the user and suggest installing it.
 
@@ -169,17 +194,24 @@ codex exec -s workspace-write \
 codex exec -s workspace-write -c model_reasoning_effort=medium "Download the brand SVG logos into src/assets/logos/ and summarize their licenses" < /dev/null
 ```
 
-Orca-routed (§3b), when the `orca` CLI is available and running:
+Orca-routed (§3b), when the `orca` CLI is available and running. Note the interactive TUI has no `exec` subcommand, no prompt argument, and no `< /dev/null`:
 
 ```bash
-# 1. Create the terminal in the current worktree with the same command as any plain-Bash example above
-orca terminal create --worktree active --title "codex-delegate" \
-  --command 'codex exec -s workspace-write "Refactor the database module to use connection pooling" < /dev/null' --json
+# 1. Create the terminal running the interactive TUI (no subcommand, no prompt, no < /dev/null)
+orca terminal create --worktree active --title "codex-delegate" --command "codex" --json
 # -> capture terminalHandle from the JSON result
 
-# 2. Wait for exit in the background (run_in_background: true)
-orca terminal wait --terminal <terminalHandle> --for exit --timeout-ms 3600000
+# 2. Wait for the TUI to finish starting up
+orca terminal wait --terminal <terminalHandle> --for tui-idle --timeout-ms 30000 --json
 
-# 3. Once notified of exit, read what happened
+# 3. Send the prompt as terminal input (not a command-line argument)
+orca terminal send --terminal <terminalHandle> --text "Refactor the database module to use connection pooling" --enter --json
+
+# 4. Wait for completion in the background (run_in_background: true); a short sleep first
+#    avoids observing tui-idle before Codex has actually started working
+sleep 10 && orca terminal wait --terminal <terminalHandle> --for tui-idle --timeout-ms 3600000 --json
+
+# 5. Once notified, read what happened. tui-idle may mean "waiting on an approval prompt"
+#    rather than "done" -- if so, send a response with terminal send and repeat step 4.
 orca terminal read --terminal <terminalHandle> --json
 ```
