@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "DIR=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; git -C \"$DIR\" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; [ \"$(git -C \"$DIR\" symbolic-ref --short HEAD 2>/dev/null)\" = \"main\" ] || exit 0; git -C \"$DIR\" pull --ff-only >/dev/null 2>&1; true",
+            "timeout": 30,
+            "statusMessage": "main を最新化中..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "DIR=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; git -C \"$DIR\" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; [ \"$(git -C \"$DIR\" symbolic-ref --short HEAD 2>/dev/null)\" = \"main\" ] || exit 0; git -C \"$DIR\" add -A >/dev/null 2>&1; git -C \"$DIR\" diff --cached --quiet || git -C \"$DIR\" commit -q -m \"chore: auto-commit (Claude Code session)\" >/dev/null 2>&1; [ -n \"$(git -C \"$DIR\" rev-list @{u}.. 2>/dev/null)\" ] && git -C \"$DIR\" push -q >/dev/null 2>&1; true",
+            "timeout": 60,
+            "statusMessage": "main へ commit & push 中..."
+          }
+        ]
+      }
+    ]
+  }
+}
