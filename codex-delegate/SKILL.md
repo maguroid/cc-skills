@@ -26,6 +26,7 @@ orca status --json
 - If the CLI is not found, or `orca status` reports Orca is not running, use the plain Bash execution path (§3).
 - If the CLI is available and Orca is running, route the invocation through an Orca terminal instead (§3b). This launches an interactive `codex` TUI (not headless `codex exec`) in that terminal; Orca detects it as an agent CLI and shows it as a live agent session in its GUI, instead of running invisibly in a background Bash process.
 - Do not launch Orca (`orca open`) just to enable this — only route through Orca when it is already running. Otherwise fall back to §3 without asking the user.
+- Exception: git-diff review tasks (§3a) always use the headless `codex exec review` path via plain Bash, even when Orca is running — `review` is an `exec` subcommand with no interactive-TUI equivalent, so Orca would not surface it as an agent session anyway.
 
 ### 1. Determine sandbox level
 
@@ -57,9 +58,16 @@ Default to enabling network only when the task clearly needs it. Prefer narrowin
 
 ### 2a. Determine reasoning effort
 
-- Default: `medium` — always pass `-c model_reasoning_effort=medium` unless the user specifies otherwise
-- If the user explicitly requests a different level (e.g. "highで", "effort low"), use that value instead
-- This default applies to the plain-Bash `codex exec` path (§3). For Orca-routed TUI execution (§3b), omit the flag by default and let `~/.codex/config.toml` govern reasoning effort — see the "Flag differences: TUI vs `exec`" note in §3b.
+Always pass `-c model_reasoning_effort=<effort>`. Default is `medium`; adjust it to the task's difficulty:
+
+| Effort | When |
+|--------|------|
+| `low` | Simple, mechanical tasks: renames, small fixes with a known cause, boilerplate generation, formatting, straightforward lookups |
+| `medium` (default) | Typical implementation and investigation tasks; use when difficulty is unclear |
+| `high` | Hard tasks: debugging with an unknown root cause, large or cross-cutting refactors, subtle logic (concurrency, edge-case-heavy code), thorough code reviews |
+
+- If the user explicitly requests a level (e.g. "highで", "effort low"), that always wins over the difficulty-based choice
+- These rules apply to the plain-Bash `codex exec` path (§3). For Orca-routed TUI execution (§3b), omit the flag by default and let `~/.codex/config.toml` govern reasoning effort — see the "Flag differences: TUI vs `exec`" note in §3b.
 
 ### 2b. Determine web search
 
@@ -79,6 +87,8 @@ where `[network flags]` are added only for network-requiring tasks (see §1a), e
 
 **Always append `< /dev/null`.** `codex exec` reads stdin for additional prompt input *even when a prompt argument is given*. Under `run_in_background: true` the shell's stdin stays open with no EOF, so codex blocks forever — the output stalls at `Reading additional input from stdin...` and never runs. Passing the prompt as an argument is **not** enough on its own; redirecting stdin from `/dev/null` gives an immediate EOF and prevents the hang. Make `< /dev/null` part of every invocation. (To recover from a hang already in progress: `pkill -f "codex exec"`, then re-run with the redirect.)
 
+**If the working directory is not inside a git repository (or another codex-trusted directory), add `--skip-git-repo-check`** (an `exec`-level option). Without it, codex aborts immediately with `Not inside a trusted directory and --skip-git-repo-check was not specified.`
+
 Rules for constructing the prompt:
 - Pass the user's intent as-is — do not over-interpret or add unnecessary constraints
 - If the user's request requires context about the current codebase, include relevant details (current directory, file structure, etc.) in the prompt
@@ -86,13 +96,29 @@ Rules for constructing the prompt:
 
 ### 3a. Review tasks
 
-When the task is a code review (and the user has NOT specified an output location), instruct Codex to write the review to a file under `/tmp/codex-reviews/`. Include this in the prompt:
+When the task is a code review of changes in a git repository, use the dedicated `review` subcommand instead of a hand-written review prompt:
 
 ```
-Write the review result as a Markdown file to /tmp/codex-reviews/<descriptive-name>-<YYYYMMDD-HHmmss>.md
+codex exec review <target> [-o <output-file>] ["<custom review instructions>"] < /dev/null
 ```
 
-Use `-s workspace-write` so Codex can write to `/tmp`. After completion, read the output file and summarize it to the user with the file path.
+Pick the review target:
+
+| Flag | Reviews |
+|------|---------|
+| `--uncommitted` | Staged, unstaged, and untracked changes |
+| `--base <branch>` | Changes against a base branch (PR-style review) |
+| `--commit <SHA>` | Changes introduced by a specific commit |
+
+Notes:
+
+- `review` runs in a read-only sandbox automatically — there is no `-s` flag, and the §1/§2a sandbox/effort defaults do not apply. Only pass `-m` or `-c` flags when the user explicitly asks for them.
+- Unless the user specified an output location, pass `-o /tmp/codex-reviews/<descriptive-name>-<YYYYMMDD-HHmmss>.md` (create the directory first with `mkdir -p /tmp/codex-reviews`) so the final review is written to a file. After completion, read the file and summarize it to the user with the file path.
+- Pass review-focus requests (e.g. "セキュリティ観点で") as the optional prompt argument.
+- Findings come back with priority labels ([P1], [P2], …) and `file:line` locations — preserve these in the summary.
+- The stdin rule (§3) and `run_in_background: true` apply here as usual.
+- `review` is headless-only: run it via the plain-Bash path even when Orca is available (see §0). It has no interactive-TUI equivalent, so §3b does not apply.
+- For review requests that are NOT about a git diff (e.g. "review this file/design doc"), the `review` subcommand does not apply — fall back to a regular `codex exec -s read-only` prompt (which may route through Orca per §0).
 
 ### 3b. Orca-routed execution (when available, per §0)
 
@@ -130,7 +156,7 @@ sleep 10 && orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 3
 orca terminal read --terminal <handle> --json
 ```
 
-  `tui-idle` does **not** necessarily mean the task is complete — Codex may be paused on an approval prompt waiting for input. Inspect the read output: if it shows an approval prompt, decide on a response, send it with `orca terminal send`, and go back to the "wait for completion" step above. Once the output confirms the task actually finished, continue with §4/§5. If the task is a review (§3a), Codex still writes its Markdown output to `/tmp/codex-reviews/...`; read that file once completion is confirmed, same as the plain-Bash path.
+  `tui-idle` does **not** necessarily mean the task is complete — Codex may be paused on an approval prompt waiting for input. Inspect the read output: if it shows an approval prompt, decide on a response, send it with `orca terminal send`, and go back to the "wait for completion" step above. Once the output confirms the task actually finished, continue with §4/§5. (Git-diff reviews never reach this path — they run headless via §3a.)
 
 - **Close the terminal after the task completes.** Once completion is confirmed and the results have been read and summarized (§4/§5), close the codex session with `orca terminal close --terminal <handle> --json` so finished sessions don't pile up in Orca's GUI. Exceptions — leave it open and tell the user when: the task failed or ended ambiguously (the session is needed for diagnosis), it is blocked on an approval prompt awaiting a decision, follow-up work in the same session is already planned, or the user asked to keep it.
 
@@ -140,7 +166,7 @@ orca terminal read --terminal <handle> --json
 
 - The interactive TUI takes the form `codex [OPTIONS] [PROMPT]` — there is no `exec` subcommand. `--search` is an ordinary option here; unlike the `exec` path (§2b), there is no subcommand-ordering constraint to worry about.
 - `-s <sandbox>`, `-m <model>`, and `-c key=value` behave the same as in `exec`.
-- **Important**: the interactive TUI honors the user's `~/.codex/config.toml` settings (model, reasoning effort, sandbox, approval policy) as-is. Because of this, the `exec`-path defaults from §2 (omit `-m`) and §2a (always pass `-c model_reasoning_effort=medium`) do **not** carry over — for Orca-routed TUI invocations, the default is to pass **no** model/effort flags and let the user's config decide. Only add flags when there's an explicit reason to deviate: the user requested a specific model/effort, the task needs network access (same `-c` flags as §1a), or a read-only investigation should be constrained with `-s read-only`.
+- **Important**: the interactive TUI honors the user's `~/.codex/config.toml` settings (model, reasoning effort, sandbox, approval policy) as-is. Because of this, the `exec`-path defaults from §2 (omit `-m`) and §2a (always pass a difficulty-based `-c model_reasoning_effort`) do **not** carry over — for Orca-routed TUI invocations, the default is to pass **no** model/effort flags and let the user's config decide. Only add flags when there's an explicit reason to deviate: the user requested a specific model/effort, the task needs network access (same `-c` flags as §1a), or a read-only investigation should be constrained with `-s read-only`.
 - Whether an approval prompt appears depends on the config's `approval_policy`. Watch for it and respond as described in the "read the output" step above.
 
 ### 4. Handle the result
@@ -174,11 +200,20 @@ codex exec -s workspace-write "Create a Python script that reads CSV files and o
 # Write with model override
 codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to use connection pooling" < /dev/null
 
+# Simple mechanical task: lower the reasoning effort
+codex exec -s workspace-write -c model_reasoning_effort=low "Rename the function getUserData to fetchUserProfile across the codebase" < /dev/null
+
+# Hard task (unknown root cause): raise the reasoning effort
+codex exec -s workspace-write -c model_reasoning_effort=high "The test suite fails intermittently on CI but passes locally. Find the root cause and fix it" < /dev/null
+
 # Web search: research/fact-checking task (--search must precede exec)
 codex --search exec -s read-only "Look up the latest Next.js release notes and summarize breaking changes" < /dev/null
 
-# Review: output to /tmp
-codex exec -s workspace-write "Review the recent changes for potential bugs. Write the review as Markdown to /tmp/codex-reviews/recent-changes-20260617-141000.md" < /dev/null
+# Review: uncommitted changes, result written to /tmp (mkdir -p /tmp/codex-reviews first)
+codex exec review --uncommitted -o /tmp/codex-reviews/uncommitted-20260617-141000.md < /dev/null
+
+# Review: PR-style against a base branch, with a custom focus
+codex exec review --base main -o /tmp/codex-reviews/pr-vs-main-20260617-141000.md "Focus on security issues" < /dev/null
 
 # Network: install dependencies (broad access)
 codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "Install dependencies and make the build pass" < /dev/null
