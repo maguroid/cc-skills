@@ -144,6 +144,8 @@ orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 30000 --json
 orca terminal send --terminal <handle> --text "<prompt>" --enter --json
 ```
 
+  Note: the startup `tui-idle` can be satisfied while the TUI is still initializing (model shows "loading", MCP servers still starting), so a send issued right after it may interleave with startup rendering — observed in practice as stray characters mixed into the composer line, though the prompt itself still got through and was answered correctly. If the prompt must arrive clean, insert a short `sleep 5` between the startup wait and `terminal send`, then confirm via `orca terminal read` that the sent prompt was accepted intact.
+
 - Wait for completion. The TUI process never exits, so wait on `--for tui-idle`, not `--for exit`. Immediately after `terminal send`, Orca can report `tui-idle` before Codex has actually started working, so insert a short sleep before waiting. Run this via the Bash tool with `run_in_background: true`, since Codex tasks can run long and this keeps the main loop free:
 
 ```bash
