@@ -146,10 +146,21 @@ orca terminal send --terminal <handle> --text "<prompt>" --enter --json
 
   Note: the startup `tui-idle` can be satisfied while the TUI is still initializing (model shows "loading", MCP servers still starting), so a send issued right after it may interleave with startup rendering — observed in practice as stray characters mixed into the composer line, though the prompt itself still got through and was answered correctly. If the prompt must arrive clean, insert a short `sleep 5` between the startup wait and `terminal send`, then confirm via `orca terminal read` that the sent prompt was accepted intact.
 
-- Wait for completion. The TUI process never exits, so wait on `--for tui-idle`, not `--for exit`. Immediately after `terminal send`, Orca can report `tui-idle` before Codex has actually started working, so insert a short sleep before waiting. Run this via the Bash tool with `run_in_background: true`, since Codex tasks can run long and this keeps the main loop free:
+- Wait for completion. The TUI process never exits, so wait on `--for tui-idle`, not `--for exit`. Immediately after `terminal send`, Orca can report `tui-idle` before Codex has actually started working, so insert a short sleep before waiting. Run this via the Bash tool with `run_in_background: true`, since Codex tasks can run long and this keeps the main loop free.
+
+  **`tui-idle` alone is NOT a completion signal** — it also fires on turn boundaries, brief render pauses, and approval prompts, and a single (or even double) idle wait has been observed in practice to resolve mid-task, minutes before the work was done. For any task with a checkable artifact, detect completion **artifact-based**: loop "wait for tui-idle → check the artifact → if unmet, wait again". For a task that ends in a commit, the artifact check is a moved `git HEAD`; for other tasks, instruct codex in the prompt to write a marker file (e.g. `touch /tmp/<task>-done`) as its final step and check for that.
 
 ```bash
-sleep 10 && orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 3600000 --json
+# Artifact-based completion loop (example: task ends with a commit & push)
+BEFORE=$(git -C <repo> rev-parse HEAD)
+sleep 10
+for i in $(seq 1 60); do
+  orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 3600000 --json > /dev/null
+  sleep 5
+  if [ "$(git -C <repo> rev-parse HEAD)" != "$BEFORE" ] && [ -z "$(git -C <repo> status --porcelain)" ]; then
+    break   # artifact present and tree clean -> genuinely done
+  fi
+done
 ```
 
 - Read the output once idle:
