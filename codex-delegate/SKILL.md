@@ -83,7 +83,7 @@ Rules for constructing the prompt:
 When the task is a code review of changes in a git repository, use the dedicated `review` subcommand instead of a hand-written review prompt:
 
 ```
-codex exec review <target> [-o <output-file>] ["<custom review instructions>"] < /dev/null
+codex exec review <target> [-o <output-file>] < /dev/null
 ```
 
 Pick the review target:
@@ -94,11 +94,13 @@ Pick the review target:
 | `--base <branch>` | Changes against a base branch (PR-style review) |
 | `--commit <SHA>` | Changes introduced by a specific commit |
 
+**Custom review instructions cannot be combined with a target flag.** As of codex 2026-07, passing a prompt argument together with `--uncommitted` (and likewise the other target flags) errors with `the argument '--uncommitted' cannot be used with '[PROMPT]'`. A bare `codex exec review "<instructions>"` (no target flag) accepts the prompt and reviews uncommitted changes. So: default to the target flag without instructions; when a review focus is essential, drop the target flag (uncommitted scope) or fall back to a regular `codex exec -s read-only` prompt for other scopes.
+
 Notes:
 
 - `review` runs in a read-only sandbox automatically — there is no `-s` flag, and the §1/§2a sandbox/effort defaults do not apply. Only pass `-m` or `-c` flags when the user explicitly asks for them.
 - Unless the user specified an output location, pass `-o /tmp/codex-reviews/<descriptive-name>-<YYYYMMDD-HHmmss>.md` (create the directory first with `mkdir -p /tmp/codex-reviews`) so the final review is written to a file. After completion, read the file and summarize it to the user with the file path.
-- Pass review-focus requests (e.g. "セキュリティ観点で") as the optional prompt argument.
+- Review-focus requests (e.g. "セキュリティ観点で"): see the constraint above — prompt and target flag are mutually exclusive. Use `codex exec review "<focus>"` for uncommitted-scope focused reviews; otherwise omit the focus.
 - Findings come back with priority labels ([P1], [P2], …) and `file:line` locations — preserve these in the summary.
 - The stdin rule (§3) and `run_in_background: true` apply here as usual.
 - For review requests that are NOT about a git diff (e.g. "review this file/design doc"), the `review` subcommand does not apply — fall back to a regular `codex exec -s read-only` prompt.
@@ -146,8 +148,11 @@ codex --search exec -s read-only "Look up the latest Next.js release notes and s
 # Review: uncommitted changes, result written to /tmp (mkdir -p /tmp/codex-reviews first)
 codex exec review --uncommitted -o /tmp/codex-reviews/uncommitted-20260617-141000.md < /dev/null
 
-# Review: PR-style against a base branch, with a custom focus
-codex exec review --base main -o /tmp/codex-reviews/pr-vs-main-20260617-141000.md "Focus on security issues" < /dev/null
+# Review: PR-style against a base branch (no custom instructions — incompatible with target flags)
+codex exec review --base main -o /tmp/codex-reviews/pr-vs-main-20260617-141000.md < /dev/null
+
+# Review: uncommitted scope with a custom focus (prompt only works WITHOUT a target flag)
+codex exec review -o /tmp/codex-reviews/security-20260617-141000.md "Focus on security issues" < /dev/null
 
 # Network: install dependencies (broad access)
 codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "Install dependencies and make the build pass" < /dev/null
