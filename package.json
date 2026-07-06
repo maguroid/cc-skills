@@ -1,0 +1,11 @@
+{
+  "name": "cc-skills",
+  "private": true,
+  "scripts": {
+    "secretlint": "secretlint"
+  },
+  "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.2",
+    "secretlint": "^13.0.2"
+  }
+}

@@ -1,0 +1,4 @@
+pre-push:
+  commands:
+    secretlint:
+      run: npm run secretlint -- {push_files}
