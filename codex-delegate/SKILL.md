@@ -78,6 +78,29 @@ Rules for constructing the prompt:
 - If the user's request requires context about the current codebase, include relevant details (current directory, file structure, etc.) in the prompt
 - Quote the prompt with double quotes; escape any inner double quotes
 
+### 3-wrapper. Preferred invocation: `scripts/codex-run.sh`
+
+**Do not hand-assemble the `codex exec` command line.** Even with the rules above documented, hand-built invocations kept breaking on the two failure modes (missing `< /dev/null` → stdin hang; `| tail` → buffered/empty output). Call the bundled wrapper instead — it hardcodes `< /dev/null`, writes the full transcript to a log file, and prints only a short tail + exit code, so those mistakes are impossible.
+
+The wrapper lives beside this file at `scripts/codex-run.sh` (resolve its absolute path from the skill directory). Decide the flags per §1–§2b, write the prompt to a temp file (avoids shell-quoting bugs on long/multiline prompts), then launch **with `run_in_background: true`**:
+
+```bash
+# write the prompt to a file first
+cat > /tmp/codex-prompt.md <<'EOF'
+<the full prompt, multiline is fine, no escaping needed>
+EOF
+
+<skill-dir>/scripts/codex-run.sh \
+  --prompt-file /tmp/codex-prompt.md \
+  --dir <workdir> \
+  --sandbox workspace-write \
+  --effort medium \
+  [--model <m>] [--network] [--search] [--skip-git-check] \
+  [--out /tmp/codex-run.log]
+```
+
+Flag mapping: `--sandbox` (§1), `--network` (§1a, broad access), `--model` (§2), `--effort` (§2a), `--search` (§2b), `--skip-git-check` (§3, non-git workdir). For domain-restricted network or the `review` subcommand (§3a), the wrapper does not cover those — use the documented raw invocation (still ending in `< /dev/null`). When the wrapper finishes, read its `log:` file if you need the full transcript; otherwise the printed tail + exit code is enough to summarize.
+
 ### 3a. Review tasks
 
 When the task is a code review of changes in a git repository, use the dedicated `review` subcommand instead of a hand-written review prompt:
