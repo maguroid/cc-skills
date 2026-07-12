@@ -39,7 +39,7 @@ Default to enabling network only when the task clearly needs it. Prefer narrowin
 ### 2. Determine model
 
 - Default: omit the `-m` flag (uses the model from the user's codex config)
-- If the user explicitly requests a specific model (e.g. "gpt-5.4で", "use gpt-5.4-mini"), pass it via `-m <model>`
+- If the user explicitly requests a specific model (e.g. "gpt-5.6-solで", "use gpt-5.6-luna"), pass it via `-m <model>`. Otherwise never hardcode a model name — the config default tracks the current model, so omitting `-m` is what keeps this skill current as models change.
 
 ### 2a. Determine reasoning effort
 
@@ -157,7 +157,7 @@ codex exec -s read-only "Explain the authentication flow in this codebase" < /de
 codex exec -s workspace-write "Create a Python script that reads CSV files and outputs JSON" < /dev/null
 
 # Write with model override
-codex exec -s workspace-write -m gpt-5.4-mini "Refactor the database module to use connection pooling" < /dev/null
+codex exec -s workspace-write -m gpt-5.6-luna "Refactor the database module to use connection pooling" < /dev/null
 
 # Simple mechanical task: lower the reasoning effort
 codex exec -s workspace-write -c model_reasoning_effort=low "Rename the function getUserData to fetchUserProfile across the codebase" < /dev/null
