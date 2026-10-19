@@ -27,7 +27,7 @@ Claude Code の「スキル」は、特定の作業手順をまとめた説明�
 
 ### 前提
 
-- Node.js と npm（開発時に検証したのは Node.js v22 / npm v10）
+- Node.js v22 以上 と npm（`secretlint` などの依存パッケージが `package-lock.json` で `node >= 22.0.0` を要求します）
 - git
 
 ### 依存関係のインストール
